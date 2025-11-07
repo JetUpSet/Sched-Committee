@@ -94,7 +94,7 @@ const navigation = computed(() => ([
   },
   { name: 'Required Rest', href: '/RestRecover', icon: 'heroicons:moon', current: route.name === 'restRecover' },
   { name: 'Disputed Pairings', href: '/disputedPairings', icon: 'heroicons:exclamation-circle', current: route.name === 'disputedPairings' },
-  { name: 'Extension Form', href: '/extensionForm', icon: 'heroicons:document-text', current: route.name === 'extensionForm' },
+  { name: 'Extension/Revision Form', href: '/extensionForm', icon: 'heroicons:document-text', current: route.name === 'extensionForm' },
 ]));
 
 const sidebarOpen = ref(false);

@@ -2,9 +2,42 @@
   <div class="bg-white dark:bg-gray-900 py-0 sm:py-8">
     <div class="mx-auto max-w-7xl px-6 lg:px-8">
       <SectionHeader
-        title="Extension Submission Form"
-        subtitle="Submit information about trip extensions for Scheduling Committee review"
+        title="Revision/Extension Report"
+        subtitle="Submit information about trip extensions and revisions for Scheduling Committee review"
       />
+
+      <!-- Offline/Online Status & Pending Submissions -->
+      <div class="mt-6 max-w-3xl mx-auto space-y-3">
+        <!-- Offline Indicator -->
+        <UAlert
+          v-if="!isOnline"
+          color="amber"
+          variant="soft"
+          title="Offline Mode"
+          description="You're currently offline. Submissions will be queued and automatically synced when you're back online."
+          icon="i-heroicons-wifi-slash"
+        />
+
+        <!-- Syncing Indicator -->
+        <UAlert
+          v-if="isSyncing"
+          color="blue"
+          variant="soft"
+          title="Syncing Submissions"
+          description="Uploading queued submissions to the server..."
+          icon="i-heroicons-arrow-path"
+        />
+
+        <!-- Pending Submissions Count -->
+        <UAlert
+          v-if="pendingCount > 0 && !isSyncing"
+          color="sky"
+          variant="soft"
+          :title="`${pendingCount} Pending Submission${pendingCount > 1 ? 's' : ''}`"
+          :description="`You have ${pendingCount} submission${pendingCount > 1 ? 's' : ''} waiting to be synced. ${isOnline ? 'Syncing will happen automatically.' : 'Will sync when back online.'}`"
+          icon="i-heroicons-clock"
+        />
+      </div>
 
       <div class="mt-8 max-w-3xl mx-auto">
         <UCard>
@@ -192,11 +225,21 @@
 
             <!-- Success Message -->
             <UAlert
-              v-if="submissionSuccess"
+              v-if="submissionSuccess && !queuedOffline"
               color="green"
               variant="soft"
               title="Submission Successful"
               description="Thank you for your extension report. The Scheduling Committee will review your submission."
+            />
+
+            <!-- Queued Offline Success Message -->
+            <UAlert
+              v-if="submissionSuccess && queuedOffline"
+              color="blue"
+              variant="soft"
+              title="Queued for Sync"
+              description="Your submission has been saved locally and will be automatically uploaded when you're back online."
+              icon="i-heroicons-check-circle"
             />
           </form>
         </UCard>
@@ -214,11 +257,18 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 
 definePageMeta({
   title: 'Extension Form',
 });
+
+// Offline queue composable
+const { queueSubmission, syncAllPending, pendingCount, isSyncing } = useOfflineQueue();
+
+// Online/Offline state
+const isOnline = ref(true);
+const queuedOffline = ref(false);
 
 // Form data
 const formData = ref({
@@ -308,10 +358,9 @@ async function handleSubmit() {
 
   isSubmitting.value = true;
   errorMessage.value = '';
+  queuedOffline.value = false;
 
   try {
-    const { supabase } = useSupabase();
-
     // Prepare submission data
     const submissionData = {
       employee_number: formData.value.employeeNumber,
@@ -323,6 +372,22 @@ async function handleSubmit() {
       submitted_at: new Date().toISOString(),
     };
 
+    // Check if offline - queue submission
+    if (!isOnline.value) {
+      await queueSubmission(submissionData, formData.value.screenshot || undefined);
+      queuedOffline.value = true;
+      submissionSuccess.value = true;
+
+      // Reset form after queuing
+      setTimeout(() => {
+        resetForm();
+      }, 3000);
+
+      return;
+    }
+
+    // Online - submit directly
+    const { supabase } = useSupabase();
     let screenshotUrl = null;
 
     // If there's a screenshot, upload it to Supabase Storage first
@@ -343,7 +408,6 @@ async function handleSubmit() {
         throw new Error('Failed to upload screenshot');
       }
 
-      // Store the path - it will be accessed via signed URLs by authenticated users
       screenshotUrl = uploadData.path;
     }
 
@@ -366,22 +430,7 @@ async function handleSubmit() {
 
     // Reset form after successful submission
     setTimeout(() => {
-      formData.value = {
-        employeeNumber: '',
-        contactEmail: '',
-        tripNumber: '',
-        numberOfRevisions: 1,
-        wasExtended: null,
-        extensionInformation: '',
-        screenshot: null,
-      };
-      submissionSuccess.value = false;
-
-      // Reset file input
-      const fileInput = document.getElementById('screenshot') as HTMLInputElement;
-      if (fileInput) {
-        fileInput.value = '';
-      }
+      resetForm();
     }, 5000);
 
   } catch (error: any) {
@@ -391,6 +440,64 @@ async function handleSubmit() {
     isSubmitting.value = false;
   }
 }
+
+// Reset form helper
+function resetForm() {
+  formData.value = {
+    employeeNumber: '',
+    contactEmail: '',
+    tripNumber: '',
+    numberOfRevisions: 1,
+    wasExtended: null,
+    extensionInformation: '',
+    screenshot: null,
+  };
+  submissionSuccess.value = false;
+  queuedOffline.value = false;
+
+  // Reset file input
+  const fileInput = document.getElementById('screenshot') as HTMLInputElement;
+  if (fileInput) {
+    fileInput.value = '';
+  }
+}
+
+// Handle online event
+function handleOnline() {
+  isOnline.value = true;
+  console.log('Back online - syncing queued submissions...');
+  // Sync queued submissions
+  syncAllPending().then((result) => {
+    if (result.success > 0) {
+      console.log(`Successfully synced ${result.success} submission(s)`);
+    }
+    if (result.failed > 0) {
+      console.warn(`Failed to sync ${result.failed} submission(s)`);
+    }
+  });
+}
+
+// Handle offline event
+function handleOffline() {
+  isOnline.value = false;
+  console.log('Gone offline');
+}
+
+// Setup online/offline listeners
+onMounted(() => {
+  if (process.client) {
+    isOnline.value = navigator.onLine;
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+  }
+});
+
+onUnmounted(() => {
+  if (process.client) {
+    window.removeEventListener('online', handleOnline);
+    window.removeEventListener('offline', handleOffline);
+  }
+});
 </script>
 
 <style scoped>
